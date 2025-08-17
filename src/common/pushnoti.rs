@@ -5,7 +5,7 @@
 
 use anyhow::Context;
 use fcm_push_listener::*;
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, VecDeque};
 use std::{fs, sync::Arc};
 use tokio::{
     sync::{
@@ -14,7 +14,7 @@ use tokio::{
         watch::{channel as watch, Receiver as WatchReceiver, Sender as WatchSender},
         RwLock,
     },
-    time::{sleep, timeout, Duration},
+    time::{sleep, timeout, Duration, Instant},
 };
 
 use super::NeoInstance;
@@ -23,8 +23,13 @@ use crate::AnyResult;
 pub(crate) struct PushNotiThread {
     pn_watcher: Arc<WatchSender<Option<PushNoti>>>,
     registed_cameras: HashMap<String, NeoInstance>,
-    received_ids: Arc<RwLock<HashSet<String>>>,
+    received_ids: Arc<RwLock<VecDeque<(Instant, String)>>>,
 }
+
+// How long to remember received push IDs
+const RECEIVED_ID_TTL: Duration = Duration::from_secs(60 * 60);
+// Maximum number of IDs to remember
+const RECEIVED_ID_MAX: usize = 1000;
 
 // The push notification
 #[derive(Clone, Eq, PartialEq, Debug)]
@@ -188,7 +193,12 @@ impl PushNotiThread {
                                     id: message.persistent_id,
                                 }));
                             },
-                            received_ids.read().await.iter().cloned().collect(),
+                            received_ids
+                                .read()
+                                .await
+                                .iter()
+                                .map(|(_, id)| id.clone())
+                                .collect(),
                         );
                         let r = timeout(Duration::from_secs(60*5), listener.connect()).await;
                         match &r {
@@ -254,7 +264,18 @@ impl PushNotiThread {
                             }
                             PnRequest::AddPushID{id} => {
                                 log::trace!("Recived Push Notifcation of ID: {id}");
-                                received_ids.write().await.insert(id);
+                                let mut ids = received_ids.write().await;
+                                let now = Instant::now();
+                                if !ids.iter().any(|(_, existing)| existing == &id) {
+                                    ids.push_back((now, id));
+                                }
+                                while let Some((instant, _)) = ids.front() {
+                                    if now.duration_since(*instant) > RECEIVED_ID_TTL || ids.len() > RECEIVED_ID_MAX {
+                                        ids.pop_front();
+                                    } else {
+                                        break;
+                                    }
+                                }
                             }
                         }
                     }

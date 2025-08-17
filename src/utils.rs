@@ -114,8 +114,7 @@ pub(crate) async fn connect_and_login(camera_config: &CameraConfig) -> Result<Bc
         &camera_config.camera_addr,
         &camera_config.camera_uid,
         &camera_config.discovery,
-    )
-    .unwrap();
+    )?;
     info!(
         "{}: Connecting to camera at {}",
         camera_config.name, camera_addr
@@ -145,4 +144,29 @@ pub(crate) async fn connect_and_login(camera_config: &CameraConfig) -> Result<Bc
     info!("{}: Connected and logged in", camera_config.name);
 
     Ok(camera)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use neolink_core::bc_protocol::DiscoveryMethods;
+
+    #[test]
+    fn address_or_uid_requires_value() {
+        let method = DiscoveryMethods::None;
+        assert!(AddressOrUid::new(&None, &None, &method).is_err());
+    }
+
+    #[tokio::test]
+    async fn connect_and_login_errors_without_address_or_uid() {
+        let camera_config: CameraConfig = toml::from_str(
+            r#"
+            name = "cam"
+            username = "user"
+            "#,
+        )
+        .unwrap();
+
+        assert!(connect_and_login(&camera_config).await.is_err());
+    }
 }
